@@ -1,0 +1,17 @@
+{
+  "name": "snap7-server",
+  "version": "1.0.0",
+  "description": "S7 Server with 3 tags that increment every second",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js"
+  },
+  "keywords": ["snap7", "s7", "plc", "server"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "node-snap7": "^1.3.0"
+  }
+}
+
+
