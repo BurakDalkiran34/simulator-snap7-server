@@ -93,8 +93,8 @@ setInterval(() => {
     const lastFive = tagValues.slice(-5).join(', ');
     const merkerFirstFive = merkerValues.slice(0, 5).join(', ');
     const merkerLastFive = merkerValues.slice(-5).join(', ');
-    console.log(`DB1 Tag değerleri (ilk 5): [${firstFive}...] (son 5): [...${lastFive}]`);
-    console.log(`Merker (M) değerleri (ilk 5): [${merkerFirstFive}...] (son 5): [...${merkerLastFive}]`);
+    // console.log(`DB1 Tag değerleri (ilk 5): [${firstFive}...] (son 5): [...${lastFive}]`);
+    // console.log(`Merker (M) değerleri (ilk 5): [${merkerFirstFive}...] (son 5): [...${merkerLastFive}]`);
 }, 1000);
 
 // Her 5 saniyede Tag 50'yi artır
@@ -158,7 +158,146 @@ s7server.on('event', function(event) {
 
 s7server.on('readWrite', function(sender, operation, tagObj, buffer, callback) {
     const opType = operation === s7server.operationRead ? 'Read' : 'Write';
-    console.log(`${opType} işlemi - Sender: ${sender}, Area: ${tagObj.Area}, DB: ${tagObj.DBNumber}, Start: ${tagObj.Start}, Size: ${tagObj.Size}`);
+    
+    if (operation === s7server.operationWrite) {
+        // Write işlemi - Client'tan gelen verileri logla
+        const area = tagObj.Area;
+        const dbNumber = tagObj.DBNumber;
+        const start = tagObj.Start;
+        const size = tagObj.Size;
+        
+        // Area tipini belirle
+        let areaName = 'Unknown';
+        if (area === s7server.srvAreaDB) areaName = 'DB';
+        else if (area === s7server.srvAreaMK) areaName = 'Merker (M)';
+        else if (area === s7server.srvAreaPE) areaName = 'PE (Input)';
+        else if (area === s7server.srvAreaPA) areaName = 'PA (Output)';
+        else if (area === s7server.srvAreaCT) areaName = 'CT (Counter)';
+        else if (area === s7server.srvAreaTM) areaName = 'TM (Timer)';
+        
+        console.log(`\n=== WRITE İŞLEMİ ===`);
+        console.log(`Sender: ${sender}`);
+        console.log(`Area: ${areaName} (${area})`);
+        console.log(`DB Number: ${dbNumber}`);
+        console.log(`Start Offset: ${start} bytes`);
+        console.log(`Size: ${size} bytes`);
+        
+        // Buffer içeriğini parse et (Word formatında - 2 byte)
+        if (size >= 2 && size % 2 === 0) {
+            const wordCount = size / 2;
+            const values = [];
+            const oldValues = [];
+            
+            // Eski değerleri oku (DB1 için)
+            if (area === s7server.srvAreaDB && dbNumber === 1) {
+                for (let i = 0; i < wordCount; i++) {
+                    const offset = start + (i * 2);
+                    if (offset < db1Buffer.length) {
+                        oldValues.push(db1Buffer.readUInt16BE(offset));
+                    }
+                }
+            }
+            // Merker için eski değerleri oku
+            else if (area === s7server.srvAreaMK) {
+                for (let i = 0; i < wordCount; i++) {
+                    const offset = start + (i * 2);
+                    if (offset < merkerBuffer.length) {
+                        oldValues.push(merkerBuffer.readUInt16BE(offset));
+                    }
+                }
+            }
+            
+            // Yeni değerleri oku
+            for (let i = 0; i < wordCount; i++) {
+                const offset = i * 2;
+                if (offset < buffer.length) {
+                    values.push(buffer.readUInt16BE(offset));
+                }
+            }
+            
+            // Değerleri logla ve buffer'ları güncelle
+            console.log(`\nYazılan Word Değerleri (${wordCount} adet):`);
+            for (let i = 0; i < values.length; i++) {
+                const tagIndex = Math.floor(start / 2) + i;
+                const oldVal = oldValues[i] !== undefined ? oldValues[i] : 'N/A';
+                const newVal = values[i];
+                const changed = oldValues[i] !== undefined && oldValues[i] !== newVal ? ' ✓ DEĞİŞTİ' : '';
+                console.log(`  Tag[${tagIndex}] (Offset ${start + (i * 2)}): ${oldVal} → ${newVal}${changed}`);
+                
+                // Buffer'ları ve değer dizilerini güncelle
+                if (area === s7server.srvAreaDB && dbNumber === 1) {
+                    const offset = start + (i * 2);
+                    if (offset < db1Buffer.length) {
+                        // Buffer'a yaz
+                        buffer.copy(db1Buffer, offset, i * 2, (i * 2) + 2);
+                        // Değer dizisini güncelle
+                        if (tagIndex < tagValues.length) {
+                            tagValues[tagIndex] = newVal;
+                        }
+                    }
+                } else if (area === s7server.srvAreaMK) {
+                    const offset = start + (i * 2);
+                    if (offset < merkerBuffer.length) {
+                        // Buffer'a yaz
+                        buffer.copy(merkerBuffer, offset, i * 2, (i * 2) + 2);
+                        // Değer dizisini güncelle
+                        if (tagIndex < merkerValues.length) {
+                            merkerValues[tagIndex] = newVal;
+                        }
+                    }
+                }
+            }
+            
+            // Buffer güncellemesini server'a bildir
+            if (area === s7server.srvAreaDB && dbNumber === 1) {
+                s7server.SetArea(s7server.srvAreaDB, 1, db1Buffer);
+            } else if (area === s7server.srvAreaMK) {
+                s7server.SetArea(s7server.srvAreaMK, 0, merkerBuffer);
+            }
+            
+            // Hex dump göster (ilk 32 byte)
+            const hexDumpSize = Math.min(size, 32);
+            const hexValues = [];
+            for (let i = 0; i < hexDumpSize; i++) {
+                hexValues.push(buffer[i].toString(16).padStart(2, '0').toUpperCase());
+            }
+            console.log(`\nHex Dump (ilk ${hexDumpSize} byte):`);
+            console.log(`  ${hexValues.join(' ')}`);
+        } else {
+            // Byte formatında göster ve buffer'ı güncelle
+            const byteValues = [];
+            for (let i = 0; i < Math.min(size, 32); i++) {
+                byteValues.push(buffer[i]);
+            }
+            console.log(`\nYazılan Byte Değerleri (ilk ${Math.min(size, 32)} byte):`);
+            console.log(`  ${byteValues.join(', ')}`);
+            
+            // Buffer'ı güncelle (byte formatında)
+            if (area === s7server.srvAreaDB && dbNumber === 1) {
+                if (start + size <= db1Buffer.length) {
+                    buffer.copy(db1Buffer, start, 0, size);
+                    s7server.SetArea(s7server.srvAreaDB, 1, db1Buffer);
+                }
+            } else if (area === s7server.srvAreaMK) {
+                if (start + size <= merkerBuffer.length) {
+                    buffer.copy(merkerBuffer, start, 0, size);
+                    s7server.SetArea(s7server.srvAreaMK, 0, merkerBuffer);
+                }
+            }
+        }
+        
+        console.log(`===================\n`);
+    } else {
+        // Read işlemi - sadece kısa log
+        const area = tagObj.Area;
+        let areaName = 'Unknown';
+        if (area === s7server.srvAreaDB) areaName = 'DB';
+        else if (area === s7server.srvAreaMK) areaName = 'Merker (M)';
+        else if (area === s7server.srvAreaPE) areaName = 'PE (Input)';
+        else if (area === s7server.srvAreaPA) areaName = 'PA (Output)';
+        
+        console.log(`Read işlemi - Sender: ${sender}, Area: ${areaName}, DB: ${tagObj.DBNumber}, Start: ${tagObj.Start}, Size: ${tagObj.Size}`);
+    }
     
     if (operation === s7server.operationRead) {
         // Read işlemi için callback ile buffer döndür
